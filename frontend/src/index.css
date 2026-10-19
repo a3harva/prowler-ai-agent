@@ -1,0 +1,581 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* Poppins stays latin-subset-only (per-weight static files exist for it) —
+   the unqualified entrypoint pulls cyrillic/greek/latin-ext for a product
+   with no non-latin UI text. JetBrains Mono ships only as a latin-400 static
+   file here, which is all identifiers/logs need.
+
+   Two faces, each with a job:
+   - Poppins is the whole UI face — headings, body, labels, display numerals.
+   - JetBrains Mono is for machine identifiers and logs — resource UIDs,
+     project ids, service accounts, scanner output. Column-aligned digits are
+     what make a list of fully-qualified identifiers scannable. */
+@import "@fontsource/poppins/latin-300.css";
+@import "@fontsource/poppins/latin-400.css";
+@import "@fontsource/poppins/latin-500.css";
+@import "@fontsource/poppins/latin-600.css";
+@import "@fontsource/jetbrains-mono/latin-400.css";
+
+/* ─────────────────────────────────────────────────────────────────────────
+   prowler agent — light by default, with a dark counterpart.
+
+   The palette uses navy ink and a saturated blue for
+   navigation and action, and warm severity/status pills on a near-white
+   ground. This is deliberately airier than an enterprise-console dark
+   theme — the app is meant to look like the compliance report it produces,
+   not like a terminal.
+
+   Two rules hold the meaning together:
+
+   1. The brand blue is reserved for NAVIGATION AND ACTION. It never
+      encodes state. Severity and status own the warm end plus green (and,
+      for low severity specifically, blue on purpose — see below), so a
+      button is never mistakable for a risk indicator.
+   2. Severity and status render as tinted pills with a text label, always.
+      Colour here is reinforcement, never the only channel — every pill's
+      text clears 4.5:1 against its own tint.
+
+   Dark mode is the `:root.dark` block near the bottom of this file, and it
+   is a redefinition of these same token NAMES — never a parallel set, and
+   never a `dark:` utility class in a component. That is what keeps the two
+   themes from drifting: a component cannot opt one theme out of a change,
+   because it never names a theme at all. The rules above hold in both.
+
+   Three pairings are load-bearing in dark specifically, because they are
+   the places a value alone is not enough:
+
+   - `--color-brand` is BOTH a text colour (`text-brand` on `bg-brand-50`,
+     27 call sites) and a fill (`bg-brand`, under `text-primary-foreground`).
+     In light one blue satisfies both against white. In dark it has to
+     brighten to stay legible as text, which means whatever sits ON it must
+     darken to compensate — hence `--primary-foreground` flipping to navy
+     rather than staying white.
+   - Every `*-line` token is a border in most places but a FILL under
+     `text-ink` in `treemap-chart.tsx` and `findings-heatmap.tsx`. So in
+     dark they are dark mid-tones, not pale tints: a pale line would be
+     correct as a border and unreadable as a treemap block.
+   - `::selection` pairs its fill with `--color-ink`, which flips. It used
+     to name `--color-brand-deep` explicitly, which is near-black and
+     therefore invisible on the dark selection fill.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* shadcn's semantic slots. These stay as `@theme inline` var indirections
+   because that is the form its vendored components expect — `border-border`,
+   `bg-background`, `text-muted-foreground` and friends all resolve through
+   here. The console's own palette below uses a plain `@theme` with literal
+   values instead, because the indirection form emits no `--color-*` entry
+   and silently breaks alpha variants like `bg-brand/10`. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@theme {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Project palette */
+  --color-brand: #2b5ce6;
+  --color-brand-hover: #1f4bd1;
+  --color-brand-active: #1a3faf;
+  --color-brand-navy: #0a1b3d;
+  --color-brand-deep: #061027;
+  --color-brand-light: #5c82ee;
+  --color-brand-50: #f6f8fe;
+  --color-brand-100: #eef2fe;
+  --color-brand-200: #c7d5f9;
+
+  /* Surfaces */
+  --color-page: #fbfcff;
+  --color-panel: #ffffff;
+  --color-subtle: #f2f5fa;
+  --color-hairline: #e3e9f7;
+  --color-strong: #d3ddf3;
+  --color-track: #eef1f8;
+
+  /* Ink */
+  --color-ink: #0a1b3d;
+  --color-ink-secondary: #3e5273;
+  --color-ink-muted: #7e8da8;
+
+  /* Severity — tint + border are the task's spec values verbatim. Text is
+     darkened off spec where needed so every pair clears 4.5:1 on its own
+     fill. */
+  --color-sev-critical: #c73b2a;
+  --color-sev-critical-bg: #fdedeb;
+  --color-sev-critical-line: #f3c4bc;
+  --color-sev-high: #9e6409;
+  --color-sev-high-bg: #fdf5e7;
+  --color-sev-high-line: #efd9ad;
+  --color-sev-medium: #817214;
+  --color-sev-medium-bg: #fbf8e4;
+  --color-sev-medium-line: #e5dca6;
+  --color-sev-low: #2b5ce6;
+  --color-sev-low-bg: #eef2fe;
+  --color-sev-low-line: #c7d5f9;
+  --color-sev-informational: #657186;
+  --color-sev-informational-bg: #f2f5fa;
+  --color-sev-informational-line: #e1e8f4;
+
+  /* Status — reserved. Never reused for anything else. */
+  --color-status-pass: #1a7f52;
+  --color-status-pass-bg: #e9f7f0;
+  --color-status-pass-line: #bfe5d3;
+  --color-status-fail: #c73b2a;
+  --color-status-fail-bg: #fdedeb;
+  --color-status-fail-line: #f3c4bc;
+  --color-status-manual: #817214;
+  --color-status-manual-bg: #fbf8e4;
+  --color-status-manual-line: #e5dca6;
+  --color-status-gone: #657186;
+  --color-status-gone-bg: #f2f5fa;
+  --color-status-gone-line: #e1e8f4;
+
+  /* The one "caution" callout skin — previously borrowed sev-medium tokens
+     for a warning that is not a severity (Projects.tsx's IAM-grant note). */
+  --color-notice: #817214;
+  --color-notice-bg: #fbf8e4;
+  --color-notice-line: #e5dca6;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 14px;
+  --radius-4xl: 9999px;
+
+  --shadow-lift: 0 6px 18px rgba(10, 27, 61, 0.07);
+}
+
+:root {
+  color-scheme: light;
+  --radius: 14px;
+
+  /* shadcn's semantic slots, mapped onto the palette above so every
+     vendored component inherits the console instead of shipping its own
+     greyscale. */
+  --background: #fbfcff;
+  --foreground: #0a1b3d;
+  --card: #ffffff;
+  --card-foreground: #0a1b3d;
+  --popover: #ffffff;
+  --popover-foreground: #0a1b3d;
+  --primary: #2b5ce6;
+  --primary-foreground: #ffffff;
+  --secondary: #f2f5fa;
+  --secondary-foreground: #0a1b3d;
+  --muted: #f2f5fa;
+  --muted-foreground: #7e8da8;
+  --accent: #eef2fe;
+  --accent-foreground: #0a1b3d;
+  --destructive: #c73b2a;
+  --border: #e3e9f7;
+  --input: #d3ddf3;
+  --ring: #2b5ce6;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #3e5273;
+  --sidebar-primary: #2b5ce6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef2fe;
+  --sidebar-accent-foreground: #0a1b3d;
+  --sidebar-border: #e3e9f7;
+  --sidebar-ring: #2b5ce6;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Dark theme.
+
+   Stamped by `lib/theme.tsx` as `class="dark"` on <html> (and mirrored by a
+   pre-paint script in `index.html`, so the first frame is already correct).
+
+   Written as `:root.dark` rather than `.dark` ON PURPOSE. Tailwind emits the
+   `@theme` block's variables under `:root, :host` — the same specificity as a
+   bare `.dark`, which would leave the winner decided by source order alone.
+   That happens to work today and would break silently the first time the
+   generated output moved. `:root.dark` outranks it outright.
+
+   The ground is navy rather than neutral grey: the light theme's ink IS
+   prowler agent navy, so tinting the dark surfaces to the same hue family keeps
+   both themes recognisably the same product. Panels sit ABOVE the page
+   (#0f172b on #080f1f) — inverting the light theme's white-card-on-off-white
+   relationship rather than flattening it, so a card still reads as a card
+   with border-only treatment and no shadow to help it.
+
+   TWO SCOPES, and both are load-bearing rather than defensive:
+
+   `@media screen` keeps the dark palette off PAPER. The print rules at the
+   bottom of this file force a white ground, but browsers don't print
+   backgrounds by default — so a dark-mode user printing a report would get
+   near-white ink on white, an empty page with no error anywhere. Scoping
+   the block is the whole fix, and it costs nothing: print falls through to
+   `:root`'s light values, which is exactly the palette the report was
+   designed in. Re-declaring the light values under `@media print` would
+   work too, and would be ~40 token names free to drift out of sync.
+
+   `:not(.print-preview)` is the same fix for the on-screen half.
+   `ReportDetail.tsx` stamps `print-preview` on <html> — the same element the
+   theme class lands on — and that mode exists to promise "what you see is
+   what prints". A dark preview of a light printout breaks the one thing it
+   is for.
+   ───────────────────────────────────────────────────────────────────────── */
+@media screen {
+  :root.dark:not(.print-preview) {
+    color-scheme: dark;
+
+    /* Brand. Brightened from #2b5ce6, which is legible on white and muddy on
+     navy. `--brand-deep` stays near-black: it is Login's hero panel, which
+     is a deep brand field under white text in BOTH themes and should not
+     invert. */
+    --color-brand: #6f97f8;
+    --color-brand-hover: #8fb0fa;
+    --color-brand-active: #a8c2fc;
+    --color-brand-navy: #dbe4f7;
+    --color-brand-deep: #060d1c;
+    --color-brand-light: #9ab8fa;
+    --color-brand-50: #101a30;
+    --color-brand-100: #16223f;
+    --color-brand-200: #27395f;
+
+    /* Surfaces */
+    --color-page: #080f1f;
+    --color-panel: #0f172b;
+    --color-subtle: #17203a;
+    --color-hairline: #232e4d;
+    --color-strong: #33405f;
+    --color-track: #1b2439;
+
+    /* Ink */
+    --color-ink: #eaf0fb;
+    --color-ink-secondary: #a9b6d0;
+    --color-ink-muted: #7686a4;
+
+    /* Severity. The light theme's shape inverts rather than reverses: `-bg` is
+     a deep tint of the hue, `-line` a lighter one, and the text token the
+     brightest. `-line` has to stay DARK enough for near-white `text-ink`,
+     because treemap-chart and findings-heatmap use it as a fill rather than
+     a border. Measured against its own fill: 8.4 / 8.7 / 9.6 / 7.1 / 7.3. */
+    --color-sev-critical: #ff9e8d;
+    --color-sev-critical-bg: #331512;
+    --color-sev-critical-line: #5a241d;
+    --color-sev-high: #f0b95c;
+    --color-sev-high-bg: #2e2210;
+    --color-sev-high-line: #54401b;
+    --color-sev-medium: #dcd062;
+    --color-sev-medium-bg: #282611;
+    --color-sev-medium-line: #4a441c;
+    --color-sev-low: #8aa9f9;
+    --color-sev-low-bg: #161f38;
+    --color-sev-low-line: #2b3c66;
+    --color-sev-informational: #a3b0c6;
+    --color-sev-informational-bg: #1a2134;
+    --color-sev-informational-line: #2e3852;
+
+    /* Status */
+    --color-status-pass: #5cc99a;
+    --color-status-pass-bg: #0f2a20;
+    --color-status-pass-line: #1d4a37;
+    --color-status-fail: #ff9e8d;
+    --color-status-fail-bg: #331512;
+    --color-status-fail-line: #5a241d;
+    --color-status-manual: #dcd062;
+    --color-status-manual-bg: #282611;
+    --color-status-manual-line: #4a441c;
+    --color-status-gone: #a3b0c6;
+    --color-status-gone-bg: #1a2134;
+    --color-status-gone-line: #2e3852;
+
+    --color-notice: #dcd062;
+    --color-notice-bg: #282611;
+    --color-notice-line: #4a441c;
+
+    /* A navy-tinted shadow is invisible on a navy ground. Elevation in dark
+     comes from a near-black shadow doing the job the light theme's soft
+     one does — the hover-lift is the only place either is spent. */
+    --shadow-lift: 0 6px 18px rgba(0, 0, 0, 0.45);
+
+    /* shadcn's semantic slots, same mapping as :root, dark values.
+     `--primary-foreground` is the pairing that cannot stay put: it sits ON
+     the brightened brand, so it inverts to navy. */
+    --background: #080f1f;
+    --foreground: #eaf0fb;
+    --card: #0f172b;
+    --card-foreground: #eaf0fb;
+    --popover: #0f172b;
+    --popover-foreground: #eaf0fb;
+    --primary: #6f97f8;
+    --primary-foreground: #06101f;
+    --secondary: #17203a;
+    --secondary-foreground: #eaf0fb;
+    --muted: #17203a;
+    --muted-foreground: #7686a4;
+    --accent: #16223f;
+    --accent-foreground: #eaf0fb;
+    --destructive: #ff8a75;
+    --border: #232e4d;
+    --input: #33405f;
+    --ring: #6f97f8;
+
+    --sidebar: #0f172b;
+    --sidebar-foreground: #a9b6d0;
+    --sidebar-primary: #6f97f8;
+    --sidebar-primary-foreground: #06101f;
+    --sidebar-accent: #16223f;
+    --sidebar-accent-foreground: #eaf0fb;
+    --sidebar-border: #232e4d;
+    --sidebar-ring: #6f97f8;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply font-sans;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-page text-ink;
+    font-size: 14px;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-display;
+    letter-spacing: -0.02em;
+  }
+
+  :focus-visible {
+    @apply outline-brand;
+    outline-width: 2px;
+    outline-style: solid;
+    outline-offset: 2px;
+  }
+
+  /* `--color-ink` rather than a literal dark navy: the selection fill is a
+     brand tint in both themes, and only the ink token knows which way round
+     the theme currently is. */
+  ::selection {
+    background: var(--color-brand-200);
+    color: var(--color-ink);
+  }
+}
+
+@layer components {
+  /* The one place motion is spent: a scan that is actually running. */
+  .pulse-live {
+    animation: pulse-live 1.8s ease-in-out infinite;
+  }
+
+  @keyframes pulse-live {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  /* Shared type-role recipes — replaces four slightly different
+     uppercase-micro-label strings that had drifted across data-table.tsx,
+     findings-heatmap.tsx, meter-bar.tsx and the AuditLog/FindingDetail/
+     ScanDetail field-label pattern. */
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--color-ink-muted);
+  }
+
+  .card-title {
+    font-size: 19px;
+    font-weight: 400;
+    letter-spacing: -0.02em;
+    color: var(--color-ink);
+  }
+
+  .display-number {
+    font-family: var(--font-display);
+    font-size: 40px;
+    font-weight: 300;
+    letter-spacing: -0.04em;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-ink);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   The theme swap: a circle growing out of the toggle button.
+
+   Gated on `.theme-reveal`, which `lib/theme.tsx` stamps on <html> for the
+   duration of the transition and removes after. The gate matters: these are
+   `::view-transition-*` pseudo-elements on the ROOT snapshot, so without it
+   any future view transition in the app would inherit this wipe rather than
+   whatever it wanted.
+
+   Only the NEW snapshot is animated. The old one is left in place, full
+   size, underneath — so the incoming theme is genuinely revealed over the
+   outgoing one rather than the two cross-fading through a washed-out middle.
+   That also means the swap costs one animated element, not two.
+
+   `mix-blend-mode: normal` is not tidying. The UA default for these
+   snapshots is `plus-lighter`, which is correct for the cross-fade it is
+   designed around and wrong here: two opaque, fully overlapping layers added
+   together blow the mid-sweep frames out toward white.
+   ───────────────────────────────────────────────────────────────────────── */
+:root.theme-reveal::view-transition-old(root),
+:root.theme-reveal::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+:root.theme-reveal::view-transition-old(root) {
+  z-index: 0;
+}
+
+:root.theme-reveal::view-transition-new(root) {
+  z-index: 1;
+  animation: theme-reveal var(--reveal-ms, 520ms) cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* The three custom properties are set on <html> from the button's own
+   bounding box, so the circle starts exactly where the cursor just was, and
+   `--reveal-r` reaches the furthest viewport corner.
+
+   All three are PERCENTAGES, and must stay percentages. This pseudo-element's
+   box is the snapshot in device pixels, not CSS pixels — a `px` offset from
+   `getBoundingClientRect` lands at half position on a 2× display. See
+   `revealGeometry` in `lib/theme.tsx` for the measurement. The fallbacks here
+   only cover the frame before JS sets them. */
+@keyframes theme-reveal {
+  from {
+    clip-path: circle(0% at var(--reveal-x, 50%) var(--reveal-y, 50%));
+  }
+  to {
+    clip-path: circle(var(--reveal-r, 150%) at var(--reveal-x, 50%) var(--reveal-y, 50%));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* `theme.tsx` checks this query and swaps the theme without a transition,
+     so these rules are the backstop rather than the mechanism — they cover
+     the case where a transition is already in flight when the preference
+     changes. */
+  :root.theme-reveal::view-transition-new(root) {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Print, and its on-screen preview (`.print-preview`, toggled from a report
+ * page's "Print Preview" button — same rule bodies so what's previewed is
+ * what actually prints). Without any of this, Chrome's native print of the
+ * app shell paginates the raw screen layout: the sidebar/top bar print
+ * alongside the content, the report's card border/shadow gets sliced at
+ * every page boundary, and a finding's heading/table can split across pages
+ * because nothing carries `break-inside: avoid`. `[data-print-hide]` marks
+ * chrome that only makes sense on screen (nav, action buttons, the in-page
+ * jump strip); `.report-print-surface` marks the report's outer card, whose
+ * rounded border/shadow is what produced the doubled-edge look mid-page;
+ * `.report-subsection` is stamped by `sectionizeReportPlugin`
+ * (lib/report-markdown-plugin.ts) around each finding's heading through its
+ * resource table, so a whole finding is kept together rather than only its
+ * table or only its heading. */
+@media print {
+  [data-print-hide] {
+    display: none !important;
+  }
+
+  body,
+  .bg-page {
+    background: #fff !important;
+  }
+
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .report-print-surface {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Every other card on the page (`Panel`, always a `<section>`) is short
+   * enough to fit on one page and should never split — the status strip,
+   * the severity stat tiles' donut panel, "how this report was checked".
+   * Excluded here because it's the one card deliberately allowed to flow
+   * across many pages; `.report-subsection` below is what keeps *it*
+   * readable at page breaks, at finding granularity instead of whole-card. */
+  section:not(.report-print-surface) {
+    break-inside: avoid;
+  }
+
+  .report-subsection,
+  .report-check-meta,
+  table,
+  pre,
+  blockquote {
+    break-inside: avoid;
+  }
+
+  h2,
+  h3 {
+    break-after: avoid;
+    break-inside: avoid;
+  }
+}
+
+.print-preview [data-print-hide] {
+  display: none !important;
+}
+
+.print-preview .report-print-surface {
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}

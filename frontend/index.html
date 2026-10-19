@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Without this every responsive rule in the stylesheet is inert on a
+         phone: the page is laid out at a fake 980px and scaled down. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- `color-scheme` is set from CSS (`:root` / `:root.dark` in index.css)
+         so it follows the theme. A meta tag here would pin the UA to one
+         value regardless of the class, which is what it used to do. -->
+    <meta name="theme-color" content="#2B5CE6" />
+    <meta
+      name="description"
+      content="prowler agent — run GCP security scans, triage findings, and report compliance."
+    />
+    <title>prowler agent</title>
+  </head>
+  <body>
+    <!-- Pre-paint theme stamp. `ThemeProvider` (src/lib/theme.tsx) owns the
+         value and applies it in an effect — which runs after React mounts,
+         so a dark-mode user would see one light frame first. This mirrors the
+         same localStorage key before the first paint. It deliberately only
+         READS: the provider is still the single writer, and this falling out
+         of sync can cost at most that one frame. -->
+    <script>
+      try {
+        if (localStorage.getItem("prowler-theme") === "dark") {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (_) {
+        /* Storage can throw outright in a locked-down context. Light is the
+           default anyway, so there is nothing to recover — just don't take
+           the page down over it. */
+      }
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

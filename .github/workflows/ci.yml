@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oss-safety:
+    name: Public-source safety check
+    runs-on: ubuntu-latest
+    # gitleaks-action lists a pull request's commits to choose its scan range;
+    # without pull-requests: read that call is a 403 and the job fails.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check the public tree for identifiers and credential shapes
+        run: bash scripts/oss-safety-check.sh
+      - name: Scan the repository for secrets
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  backend:
+    name: Backend tests and migrations
+    runs-on: ubuntu-latest
+    env:
+      ENV_LOCAL_PATH: ${{ github.workspace }}/backend/.env.local
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: appuser
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: prowler_agent_test
+        options: >-
+          --health-cmd "pg_isready -U appuser"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install WeasyPrint native libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libfontconfig1
+      - name: Create test configuration from the public sample
+        working-directory: backend
+        run: |
+          sed \
+            -e 's#@postgres:5432#@localhost:5432#g' \
+            -e 's#redis://redis:6379#redis://localhost:6379#g' \
+            -e 's#CHANGE_ME_GENERATE_A_RANDOM_PASSWORD#test-password#g' \
+            -e 's#/prowler_agent$#/prowler_agent_test#' \
+            ../.env.sample > .env.local
+      - name: Apply migrations to an empty database
+        working-directory: backend
+        run: uv run alembic upgrade head
+      - name: Run backend tests
+        working-directory: backend
+        run: uv run pytest
+
+  frontend:
+    name: Frontend typecheck and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Typecheck and build
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build

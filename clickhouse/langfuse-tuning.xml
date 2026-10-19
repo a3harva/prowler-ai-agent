@@ -1,0 +1,94 @@
+<?xml version="1.0"?>
+<!--
+  ClickHouse, sized for one developer's trace store rather than a fleet.
+
+  ClickHouse ships defaults calibrated for a dedicated machine with tens of
+  gigabytes. Here it is a guest on a 4 CPU / 8 GiB Colima VM that also has to
+  hold Postgres, two Python services, a Vite dev server and — the case that
+  actually matters — a Prowler scanner container. Left at defaults it reserves
+  more cache than the entire application stack uses.
+
+  This is configuration for the real workload, not trimming into unreliability.
+  Every value below is a ceiling on memory ClickHouse would otherwise take
+  speculatively; none of them changes what it can store or answer, only how
+  much it caches while doing so.
+
+  Read docker-compose.langfuse.yml's header before changing a number here: the
+  container's own `mem_limit` is the hard stop, and these settings exist so
+  ClickHouse stays under it by its own accounting rather than being killed by
+  the kernel. A `max_server_memory_usage` above the container limit is worse
+  than no limit at all — it means ClickHouse believes it has headroom it does
+  not have, and dies mid-query instead of shedding load.
+-->
+<clickhouse>
+    <!-- Hard ceiling on server-wide memory. Deliberately below the container's
+         1 GiB limit: ClickHouse tracks its own allocations against this and
+         starts rejecting rather than growing, which is a recoverable error.
+         Exceeding the cgroup limit instead is a SIGKILL with no error at all. -->
+    <max_server_memory_usage>805306368</max_server_memory_usage>
+
+    <!-- Default is 5 GiB — larger than everything else in this VM combined.
+         Marks are index granules; 256 MiB is generous for a trace store whose
+         working set is the last few days of one developer's runs. -->
+    <mark_cache_size>268435456</mark_cache_size>
+
+    <!-- Off. It caches decompressed blocks for repeated identical reads, which
+         is a query pattern a trace UI does not have — every view is a fresh
+         time range. Paying memory for it buys nothing here. -->
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+
+    <!-- Default 128. On 4 vCPUs that is contention rather than parallelism.
+         These are ceilings on concurrent background tasks, not threads held
+         open, so the memory saving is modest — the real memory levers are the
+         two cache settings above.
+
+         **16, not the 4 tried first, and this cost two restart loops.**
+         ClickHouse validates a family of merge-tree thresholds against
+         `background_pool_size * background_merges_mutations_concurrency_ratio`
+         and refuses to start if any exceeds it:
+
+             number_of_free_entries_in_pool_to_execute_mutation             (default 20)
+             number_of_free_entries_in_pool_to_execute_optimize_entire_partition (default 25)
+
+         With a pool of 4 the budget is 8 and the first fails; raising it to 8
+         gives 16 and the *second* fails. 16 gives 32, which clears both
+         defaults with room, so none of them has to be overridden and no future
+         addition to that family breaks startup again. Overriding them
+         individually was the wrong instinct — it fixes one name at a time
+         against a list nobody has memorised.
+
+         Diagnosing this is worth knowing, because none of the obvious places
+         shows it. The container restart-loops, the healthcheck only ever says
+         "connection refused", and `docker compose logs clickhouse` shows the
+         entrypoint banner and nothing else. There are two different failure
+         stages and they surface in two different places:
+
+           * a config the server PARSED but rejected (this one) writes
+             BAD_ARGUMENTS to clickhouse-server.err.log inside the container,
+             under /var/log/clickhouse-server/;
+           * a config it could not parse at all never reaches that file, and
+             appears only on the container's own stdout via `docker logs`.
+
+         While it is looping you cannot exec in to read the first, so mount the
+         log volume (the stack's langfuse_clickhouse_logs) into a
+         throwaway alpine container and grep the err log there. Check `docker
+         logs` too before concluding the file is empty. -->
+    <background_pool_size>16</background_pool_size>
+    <background_schedule_pool_size>8</background_schedule_pool_size>
+    <background_common_pool_size>8</background_common_pool_size>
+
+    <!-- One writer (langfuse-worker) and one reader (langfuse-web). 100 is the
+         default and would let a runaway query fan out past the memory ceiling
+         above before the ceiling could stop it. -->
+    <max_concurrent_queries>16</max_concurrent_queries>
+
+    <!-- Keep the logs bounded. Without this, system.query_log and friends grow
+         without limit inside the same volume as the data they describe. -->
+    <query_log>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </query_log>
+    <query_thread_log remove="remove"/>
+    <trace_log remove="remove"/>
+    <metric_log remove="remove"/>
+    <asynchronous_metric_log remove="remove"/>
+</clickhouse>

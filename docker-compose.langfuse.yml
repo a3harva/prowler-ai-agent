@@ -1,0 +1,230 @@
+# Langfuse — agent observability, self-hosted.
+#
+# ── Why self-hosted, not Langfuse Cloud ──────────────────────────────────────
+# Traces can carry sensitive resource and identity metadata. Keep observability
+# data in infrastructure controlled by the operator.
+#
+# ── Why a profile, and why that is load-bearing ──────────────────────────────
+# Every service here is behind `profiles: [langfuse]`, so `docker-up.sh` and
+# `docker-watch.sh` are completely unaffected: Compose skips a profiled service
+# unless the profile is named. Start this stack with ./scripts/langfuse-up.sh.
+#
+# This is not tidiness. Colima stays at 4 CPU / 8 GiB by decision, and this
+# stack has to share it with an application stack that must still fit a Prowler
+# scanner container.
+#
+# ── Capacity rationale ───────────────────────────────────────────────────────
+#
+# Limits below are ceilings, not reservations. Size the host for the combined
+# application, scanner, and observability workloads, and validate capacity for
+# the deployment before enabling the optional profile.
+#
+# ── The memory ordering, which is the part to get right ──────────────────────
+# Every container here has a `mem_limit`, chosen so that under real pressure
+# **Langfuse is what the kernel kills, not Postgres, the worker, or a running
+# scan.** Protection order, most protected first:
+#
+#     postgres  →  worker  →  api  →  Langfuse
+#
+# The application services deliberately have no limits, so they can take what
+# they need; these do, so they cannot take it from them. Getting this backwards
+# is the difference between "telemetry dropped" and "the scan died and nobody
+# knows why" — and the second failure is invisible for hours.
+#
+# NODE_OPTIONS --max-old-space-size on the two Node services is the other half
+# of that. Without it Node has no idea a cgroup limit exists: it grows its heap
+# happily past `mem_limit` and is SIGKILLed with no error anywhere. Set below
+# the limit, it garbage-collects instead. A limit without this flag mostly buys
+# a harder crash.
+#
+# ── Named volumes, deliberately unlike ./postgres-data ───────────────────────
+# The application database is a host bind mount for the reasons documented in
+# docker-compose.yml: it must survive `docker volume prune` and be visible on
+# disk. Neither reason transfers to telemetry. Traces are disposable, and
+# `docker volume prune` clearing them is a feature rather than a data-loss
+# event — so named volumes are used here, which also sidesteps the entire
+# uid-ownership class of bug that made PGDATA need a subdirectory. Wiping them
+# deliberately is ./scripts/langfuse-down.sh --volumes.
+#
+# ── Ports ────────────────────────────────────────────────────────────────────
+# Only langfuse-web is published, because only a browser needs to reach it.
+# Langfuse's Postgres and Redis stay internal — which is also why they do not
+# collide with the application's own 5432 and 6379.
+
+services:
+  langfuse-postgres:
+    profiles: ["langfuse"]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD:?run scripts/langfuse-up.sh}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Separate from the application's Redis rather than a second database index
+  # on it. Langfuse drives its queues hard, and the Celery broker is not where
+  # a keyspace collision should be discovered.
+  langfuse-redis:
+    profiles: ["langfuse"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    environment:
+      LANGFUSE_REDIS_PASSWORD: ${LANGFUSE_REDIS_PASSWORD:?run scripts/langfuse-up.sh}
+    command: >
+      redis-server --requirepass ${LANGFUSE_REDIS_PASSWORD:?run scripts/langfuse-up.sh} --maxmemory 96mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a "$${LANGFUSE_REDIS_PASSWORD}" ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    profiles: ["langfuse"]
+    image: clickhouse/clickhouse-server:25.12
+    restart: unless-stopped
+    user: "101:101"
+    mem_limit: 1g
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?run scripts/langfuse-up.sh}
+    volumes:
+      # See the file's own header: every value in it is a ceiling on memory
+      # ClickHouse would otherwise reserve speculatively, and
+      # max_server_memory_usage is deliberately below mem_limit above so it
+      # sheds load rather than being killed.
+      - ./clickhouse/langfuse-tuning.xml:/etc/clickhouse-server/config.d/langfuse-tuning.xml:ro
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  minio:
+    profiles: ["langfuse"]
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    restart: unless-stopped
+    # 512m, raised from a guessed 256m after measuring: MinIO idles at ~242 MiB
+    # here, which is 94% of the original limit — one ingest burst from being
+    # OOM-killed. A container sitting that close to its ceiling is not "tuned",
+    # it is a scheduled failure.
+    mem_limit: 512m
+    entrypoint: sh
+    # The bucket has to exist before Langfuse starts; creating it here avoids a
+    # separate init container for one mkdir.
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:?run scripts/langfuse-up.sh}
+    volumes:
+      - langfuse_minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  langfuse-worker:
+    profiles: ["langfuse"]
+    image: langfuse/langfuse-worker:4.27.0
+    restart: unless-stopped
+    mem_limit: 768m
+    depends_on:
+      langfuse-postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      langfuse-redis: { condition: service_healthy }
+    environment: &langfuse-env
+      # Node has no visibility of the cgroup limit above — see the file header.
+      # 576 of the worker's 768 MiB: the rest is Node's non-heap overhead
+      # (code, buffers, native), which the cgroup counts and the heap flag does
+      # not, so the two numbers must not be equal.
+      NODE_OPTIONS: "--max-old-space-size=576"
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:?run scripts/langfuse-up.sh}@langfuse-postgres:5432/langfuse
+      SALT: ${LANGFUSE_SALT:?run scripts/langfuse-up.sh}
+      # Generated once by scripts/langfuse-up.sh and kept in an ignored,
+      # permission-restricted local file. Reusing the value is required because
+      # Langfuse encrypts persisted data with it.
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?run scripts/langfuse-up.sh}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?run scripts/langfuse-up.sh}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:?run scripts/langfuse-up.sh}
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: us-east-1
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:?run scripts/langfuse-up.sh}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      TELEMETRY_ENABLED: "false"
+
+  langfuse-web:
+    profiles: ["langfuse"]
+    image: langfuse/langfuse:4.27.0
+    restart: unless-stopped
+    # **1 GiB, raised from the 700m first guessed, on evidence.** At 700m with a
+    # 512 MiB heap the web container died on boot with
+    # "FATAL ERROR: Reached heap limit Allocation failed" — Next.js plus
+    # Langfuse's feature registration reaches ~500 MiB before serving a single
+    # request, so the heap was exhausted during startup rather than under load.
+    # The failure surfaces as langfuse-up.sh timing out with the health endpoint
+    # never answering, which reads like a slow migration and is not.
+    mem_limit: 1g
+    depends_on:
+      langfuse-worker: { condition: service_started }
+      langfuse-postgres: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      langfuse-redis: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      <<: *langfuse-env
+      # Overrides the worker's smaller heap from the anchor above — see the
+      # mem_limit comment for why this one has to be larger.
+      NODE_OPTIONS: "--max-old-space-size=768"
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?run scripts/langfuse-up.sh}
+      # ── Headless initialization ────────────────────────────────────────────
+      # Seeds an org, a project, an API key pair and a login on first boot, so
+      # the stack is usable without anyone clicking through a signup form — and,
+      # more importantly, so the keys in .env.local are known *before* the stack
+      # exists rather than copied out of a UI afterwards. Idempotent: existing
+      # resources are left alone on subsequent boots.
+      #
+      # The key pair here MUST match LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY
+      # in .env.local. They are read from the environment rather than hardcoded
+      # precisely so there is one source of truth for them.
+      LANGFUSE_INIT_ORG_ID: prowler agent
+      LANGFUSE_INIT_ORG_NAME: prowler agent
+      LANGFUSE_INIT_PROJECT_ID: prowler-agent
+      LANGFUSE_INIT_PROJECT_NAME: prowler agent
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-dev@example.test}
+      LANGFUSE_INIT_USER_NAME: Local Dev
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?run scripts/langfuse-up.sh}
+
+volumes:
+  langfuse_postgres:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio:

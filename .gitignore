@@ -1,0 +1,53 @@
+# Secrets — never commit. The negation below must stay AFTER the .env* rule,
+# otherwise the sample file is swallowed too.
+.env
+.env.*
+!.env.sample
+
+# Scan output
+reports/
+
+# Postgres data — bind-mounted from docker-compose.yml so the local DB
+# survives container recreation. Never commit it.
+postgres-data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp
+
+# Local database dumps from scripts/db-backup.sh — may contain customer data.
+backups/
+temp/
+
+# Local OSS denylist — internal names/domains/customer markers. Never committed;
+# CI supplies the same patterns through the OSS_DENYLIST_FILE secret file.
+scripts/oss-denylist.local
+.langfuse-encryption-key
+.langfuse-secrets
+.playwright-mcp/
+.claude/
+.codex/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*credentials*.json
+*service-account*.json

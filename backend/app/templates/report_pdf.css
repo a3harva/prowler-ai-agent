@@ -1,0 +1,312 @@
+/* Neutral PDF stylesheet for prowler agent.
+
+   Tokens are literal hex, copied by hand from frontend/src/index.css — there
+   is no shared token pipeline between the Python/WeasyPrint stack and the
+   Tailwind stack, so keep the two in sync manually if either changes.
+
+   It relies on fonts provided by the base image and embeds no proprietary
+   assets. */
+
+/* ── Page geometry ──────────────────────────────────────────────────────── */
+
+@page {
+  size: letter;
+  margin: 1in 1in 1.15in 1in;
+
+  @top-left {
+    content: element(header-title);
+    vertical-align: bottom;
+  }
+  @top-right { content: none; }
+  @bottom-left {
+    content: element(footer-left);
+    vertical-align: top;
+    border-top: 1.5pt solid #2b5ce6;
+    padding-top: 6pt;
+  }
+  @bottom-right {
+    /* `counter(page)`/`counter(pages)` only exist inside a page margin box's
+       own `content`, not in ordinary flowed HTML — the date comes from the
+       running element below, the page count is generated here directly. */
+    content: element(footer-right) " · Page " counter(page) " of " counter(pages);
+    vertical-align: top;
+    border-top: 1.5pt solid #2b5ce6;
+    padding-top: 6pt;
+  }
+}
+
+/* The cover page carries neither header nor footer — a document's title
+   page per the guide's own spec. */
+@page :first {
+  margin: 0;
+  @top-left { content: none; }
+  @top-right { content: none; }
+  @bottom-left { content: none; border-top: none; }
+  @bottom-right { content: none; border-top: none; }
+}
+
+/* ── Base type ──────────────────────────────────────────────────────────── */
+
+html {
+  font-family: "Liberation Sans", sans-serif;
+  font-size: 12pt;
+  line-height: 1.5;
+  color: #0a1b3d;
+}
+
+body {
+  margin: 0;
+}
+
+h1, h2, h3 {
+  font-family: "Liberation Sans", sans-serif;
+  color: #0a1b3d;
+  break-after: avoid;
+}
+
+h1 { font-size: 18pt; }
+h2 {
+  font-size: 14pt;
+  margin-top: 20pt;
+  padding-bottom: 4pt;
+  border-bottom: 0.75pt solid #e6e6e6;
+}
+h3 { font-size: 12pt; margin-top: 14pt; }
+
+p { margin: 0 0 8pt 0; }
+
+code, pre {
+  font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+}
+
+pre {
+  background: #f2f5fa;
+  border: 0.75pt solid #e6e6e6;
+  border-radius: 4pt;
+  padding: 8pt;
+  font-size: 9pt;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+code {
+  font-size: 0.9em;
+  background: #f2f5fa;
+  border-radius: 3pt;
+  padding: 1pt 3pt;
+}
+
+/* ── Cover page ─────────────────────────────────────────────────────────── */
+
+.cover {
+  /* No fixed height here on purpose — an explicit `height: 11in` box that
+     is even slightly taller than the page's content box (e.g. from margin/
+     padding arithmetic drifting by a point) silently overflows onto a
+     second page, and that overflow page then gets the *regular* @page
+     header/footer treatment (only `:first` gets the blank one), which
+     looks like a broken duplicate cover. `break-after: page` gets the same
+     "cover page, then content" result without depending on exact height
+     math being pixel-perfect. */
+  break-after: page;
+  padding: 2.1in 1in 0 1in;
+  text-align: center;
+}
+
+.cover img {
+  width: 1.21in;
+  height: 0.5in;
+}
+
+.cover h1 {
+  font-family: "Liberation Sans", sans-serif;
+  margin-top: 0.35in;
+  font-size: 26pt;
+  letter-spacing: -0.01em;
+}
+
+.cover .subtitle {
+  font-family: "Liberation Sans", sans-serif;
+  margin-top: 8pt;
+  font-size: 13pt;
+  color: #3e5273;
+}
+
+/* ── Running header/footer content (WeasyPrint `running()` elements) ─────── */
+
+.page-header-title {
+  position: running(header-title);
+  font-size: 8pt;
+  color: #7d7d7d;
+}
+
+
+.page-footer-left {
+  position: running(footer-left);
+  font-size: 9pt;
+  color: #232324;
+}
+.page-footer-left .doc-title { font-family: "Liberation Sans", sans-serif; }
+.page-footer-left .doc-client { color: #7d7d7d; font-size: 8.5pt; }
+
+.page-footer-right {
+  /* `display: inline` (not the div's default block) so this running
+     element sits on the same line as the " · Page X of Y" text appended
+     after it in the @bottom-right margin box's own `content` list —
+     otherwise the block-level content forces the trailing counters onto
+     their own line underneath it. */
+  display: inline;
+  position: running(footer-right);
+  font-size: 9pt;
+  color: #7d7d7d;
+  text-align: right;
+}
+
+/* ── Pillar summary table ──────────────────────────────────────────────── */
+
+table.summary {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10pt 0 16pt 0;
+  font-size: 11pt;
+}
+table.summary th {
+  font-family: "Liberation Sans", sans-serif;
+  text-align: left;
+  color: #7e8da8;
+  font-size: 9pt;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1pt solid #e3e9f7;
+  padding: 5pt 8pt;
+}
+table.summary td {
+  padding: 6pt 8pt;
+  border-bottom: 0.75pt solid #f2f5fa;
+}
+table.summary td.count {
+  font-family: "Liberation Sans", sans-serif;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+table.summary td.count.critical { color: #c73b2a; }
+table.summary td.count.high { color: #9e6409; }
+table.summary td.count.medium { color: #817214; }
+table.summary td.count.low { color: #2b5ce6; }
+table.summary td.count.zero { font-family: "Liberation Sans", sans-serif; color: #c9d0dc; }
+
+/* ── Check meta line (check_id · severity · category) ─────────────────── */
+
+.check-meta {
+  margin: 4pt 0 10pt 0;
+  font-size: 10pt;
+}
+.check-meta code {
+  background: none;
+  padding: 0;
+  color: #3e5273;
+}
+.sev-pill {
+  font-family: "Liberation Sans", sans-serif;
+  display: inline-block;
+  padding: 1pt 7pt;
+  border-radius: 8pt;
+  font-size: 9pt;
+}
+.sev-critical { background: #fdedeb; color: #c73b2a; }
+.sev-high { background: #fdf5e7; color: #9e6409; }
+.sev-medium { background: #fbf8e4; color: #817214; }
+.sev-low { background: #eef2fe; color: #2b5ce6; }
+.sev-informational { background: #f2f5fa; color: #657186; }
+
+/* ── Resource table ─────────────────────────────────────────────────────── */
+
+table.resources {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 6pt 0 12pt 0;
+  font-size: 9.5pt;
+}
+table.resources th {
+  font-family: "Liberation Sans", sans-serif;
+  text-align: left;
+  color: #7e8da8;
+  font-size: 8.5pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1pt solid #e3e9f7;
+  padding: 4pt 6pt;
+}
+table.resources tr {
+  /* Without this, a long `status_extended` detail can push a row across a
+     page boundary — WeasyPrint then renders the overflow fragment as bare
+     text with no cell borders on the following page, disconnected from the
+     row it belongs to. Whole rows move to the next page instead. */
+  break-inside: avoid;
+}
+table.resources td {
+  padding: 4pt 6pt;
+  border-bottom: 0.75pt solid #f2f5fa;
+  vertical-align: top;
+}
+.status-pill {
+  font-family: "Liberation Sans", sans-serif;
+  display: inline-block;
+  padding: 1pt 6pt;
+  border-radius: 8pt;
+  font-size: 8.5pt;
+  white-space: nowrap;
+}
+.status-open { background: #fdedeb; color: #c73b2a; }
+.status-muted { background: #fbf8e4; color: #817214; }
+
+/* ── Notes ─────────────────────────────────────────────────────────────── */
+
+.notes {
+  margin-top: 16pt;
+  padding-top: 10pt;
+  border-top: 0.75pt solid #e6e6e6;
+}
+.notes p {
+  font-size: 10pt;
+  font-style: italic;
+  color: #7e8da8;
+}
+
+/* ── Deep-report sections ────────────────────────────────────────────────────
+   Key Themes and Remediation Plan only appear in `deep` mode. They reuse the
+   existing summary-table and severity-pill treatments rather than introducing
+   a second visual language for the same kinds of information — a count is a
+   count whether it sits in the pillar summary or a remediation wave. */
+
+table.summary.plan td:nth-child(2) {
+  text-align: left;
+  white-space: normal;
+}
+
+/* The `check_id` lists under a theme or a wave. Secondary to the prose above
+   them: this is provenance a reader checks, not something they read through. */
+p.refs {
+  font-size: 8.5pt;
+  color: #4a5a7a;
+  margin-top: 0.2rem;
+  margin-bottom: 0.2rem;
+}
+
+p.refs code {
+  font-size: 8pt;
+}
+
+/* The live-context banner, above the executive summary rather than below it:
+   "this was never checked against live state" is a caveat on the sentence a
+   reader acts on, not a footnote to it. Rendered on every deep report,
+   including a complete one — a notice that appears only on failure trains a
+   reader to skim past its absence, and absence is the case they cannot
+   otherwise detect. */
+p.live-context {
+  border-left: 3px solid #2b5ce6;
+  background: #f4f7fe;
+  padding: 0.45rem 0.7rem;
+  margin: 0 0 0.8rem 0;
+  font-size: 9pt;
+  color: #22335c;
+}

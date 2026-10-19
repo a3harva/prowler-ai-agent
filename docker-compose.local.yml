@@ -1,0 +1,119 @@
+# APP_ENV=local, hot reload, .env.local mounted by file path (not injected as
+# process env for api/worker) — app/secrets.py::EnvFileProvider reads it as a
+# file so a key missing from the file fails startup, matching the non-local behaviour
+# of failing on a missing Secret Manager entry.
+services:
+  postgres:
+    env_file:
+      - .env.local
+    # Loopback only: the development database must never be reachable from
+    # another host on the network.
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  api:
+    environment:
+      - APP_ENV=local
+      # uvicorn --reload uses the `watchfiles` library, which defaults to
+      # inotify — and inotify events never cross the Colima bind mount, same
+      # root cause as Vite's usePolling requirement below. Without this,
+      # `--reload` silently never fires: edits land in the container's
+      # filesystem but the server keeps running the code it started with,
+      # and nothing indicates anything is wrong. Verified: every backend
+      # change made in one session never triggered a reload until the
+      # container was restarted by hand.
+      - WATCHFILES_FORCE_POLLING=true
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+      - ./.env.local:/app/.env.local:ro
+      # A dedicated, read-only ADC file. Do not mount a developer's complete
+      # gcloud profile: it can contain unrelated identities and refresh tokens.
+      # The container path is Google ADC's standard lookup location for root.
+      # With no cloud integration configured, mount an empty read-only file.
+      - ${GCLOUD_ADC_PATH:-/dev/null}:/root/.config/gcloud/application_default_credentials.json:ro
+      # GET /api/scans/{id}/log reads prowler.log straight off disk — the
+      # api container needs the same reports dir the worker writes to, or
+      # every log request 404s into "No output captured yet." regardless of
+      # what actually ran. api never launches containers, so it does not
+      # also need the Docker socket the worker gets below.
+      - ./reports:/reports
+    # Published directly (not only reachable through nginx) because the
+    # registered OAuth redirect URI is http://localhost:8000/api/auth/callback
+    # — Google redirects the browser straight there after sign-in.
+    ports:
+      - "127.0.0.1:8000:8000"
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
+    # `sync` is deliberately absent here — ./backend:/app already bind-mounts
+    # source live, and uvicorn --reload already watches it. `rebuild` is the
+    # one thing a bind mount can't give you: `docker compose watch` reruns
+    # `uv sync` inside a fresh image only when these three actually change,
+    # instead of `docker-up.sh` rebuilding on every single startup regardless
+    # — which is what silently piled up dozens of dangling images per day.
+    develop:
+      watch:
+        - path: ./backend/pyproject.toml
+          action: rebuild
+        - path: ./backend/uv.lock
+          action: rebuild
+        - path: ./backend/Dockerfile
+          action: rebuild
+
+  worker:
+    environment:
+      - APP_ENV=local
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+      - ./.env.local:/app/.env.local:ro
+      - ./reports:/reports
+      # A dedicated, read-only ADC file. The application may impersonate the
+      # configured service account, but this mount must not expose a complete
+      # developer gcloud profile or unrelated credentials. With no cloud
+      # integration configured, mount an empty read-only file.
+      - ${GCLOUD_ADC_PATH:-/dev/null}:/root/.config/gcloud/application_default_credentials.json:ro
+      # /var/run/docker.sock is Colima's own daemon socket *inside the VM
+      # that this container itself runs on* — verified with `colima ssh --
+      # ls -la /var/run/docker.sock`. On the macOS host that path would be
+      # Docker Desktop's socket instead; that does not matter here, because
+      # this bind mount is resolved by Colima's own
+      # dockerd against its own VM filesystem, a different namespace
+      # entirely from macOS. DOCKER_HOST in .env.local should be
+      # unix:///var/run/docker.sock for exactly this reason — that's the
+      # in-container path this mount produces, on both Colima and a native
+      # Linux Docker host.
+      - /var/run/docker.sock:/var/run/docker.sock
+    develop:
+      watch:
+        - path: ./backend/pyproject.toml
+          action: rebuild
+        - path: ./backend/uv.lock
+          action: rebuild
+        - path: ./backend/Dockerfile
+          action: rebuild
+
+  frontend:
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: bun run dev -- --host 0.0.0.0 --port 5173
+    # Same reasoning as api/worker: rebuild is what recreates the anonymous
+    # node_modules volume from the new image when a dependency changes —
+    # exactly the manual "rm -sf + up -d --build" that would otherwise be
+    # needed. This automates that step instead of relying on remembering it.
+    develop:
+      watch:
+        - path: ./frontend/package.json
+          action: rebuild
+        - path: ./frontend/bun.lock
+          action: rebuild
+        - path: ./frontend/Dockerfile
+          action: rebuild
+
+  nginx:
+    ports:
+      - "127.0.0.1:8080:80"
